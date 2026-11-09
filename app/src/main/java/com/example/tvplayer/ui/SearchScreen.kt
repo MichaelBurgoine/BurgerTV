@@ -56,6 +56,7 @@ import androidx.tv.material3.Text
 import com.example.tvplayer.data.Channel
 import com.example.tvplayer.data.ChannelSearch
 import com.example.tvplayer.data.Programme
+import com.example.tvplayer.data.Section
 
 // Alphabetical grid: fewer, more predictable D-pad moves than QWERTY.
 private val KEY_ROWS = listOf("ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ1234", "567890")
@@ -92,7 +93,7 @@ fun SearchScreen(
     Column(
         Modifier
             .fillMaxSize()
-            .padding(horizontal = 48.dp, vertical = 27.dp)
+            .padding(start = 24.dp, end = 48.dp, top = 27.dp, bottom = 27.dp)
             // Letters and numbers from a Bluetooth keyboard or a remote with number keys.
             .onPreviewKeyEvent { e ->
                 if (systemInput || e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -310,6 +311,11 @@ private fun ResultRow(channel: Channel, state: UiState, now: Long, onClick: () -
                 ChannelLogo(channel.logo, 40.dp)
             }
         },
-        trailingContent = { Text(channel.section.label, style = MaterialTheme.typography.labelLarge) },
+        trailingContent = {
+            Text(
+                if (channel.section == Section.WORLD) channel.countryName else channel.section.label,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        },
     )
 }

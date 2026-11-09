@@ -39,19 +39,19 @@ class StreamChecker(context: Context) {
         }
     }
 
-    suspend fun check(channel: Channel): Boolean = withContext(Dispatchers.IO) {
-        runCatching { probe(channel) }.getOrDefault(false)
+    suspend fun check(stream: StreamSource): Boolean = withContext(Dispatchers.IO) {
+        runCatching { probe(stream) }.getOrDefault(false)
     }
 
-    private fun probe(channel: Channel): Boolean {
-        var url = channel.url
+    private fun probe(stream: StreamSource): Boolean {
+        var url = stream.url
         repeat(5) { // follow up to 5 redirects, including http <-> https
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5_000
                 readTimeout = 5_000
                 instanceFollowRedirects = false
-                setRequestProperty("User-Agent", channel.userAgent ?: Http.USER_AGENT)
-                channel.referrer?.let { setRequestProperty("Referer", it) }
+                setRequestProperty("User-Agent", stream.userAgent ?: Http.USER_AGENT)
+                stream.referrer?.let { setRequestProperty("Referer", it) }
             }
             try {
                 val code = conn.responseCode

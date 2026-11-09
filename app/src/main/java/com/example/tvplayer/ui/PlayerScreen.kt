@@ -55,6 +55,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.example.tvplayer.data.Channel
 import com.example.tvplayer.data.Programme
+import com.example.tvplayer.player.PlaybackState
 import com.example.tvplayer.player.PlaybackStatus
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -71,7 +72,7 @@ fun PlayerScreen(
     state: UiState,
     channel: Channel,
     player: ExoPlayer,
-    status: PlaybackStatus,
+    playback: PlaybackState,
     onZap: (Int) -> Unit,
     onPrevious: () -> Unit,
     onTune: (Int) -> Unit,
@@ -134,11 +135,16 @@ fun PlayerScreen(
             update = { it.player = player }, // follows the swap when instant change kicks in
         )
 
-        val message = when (status) {
-            PlaybackStatus.TUNING -> "Tuning…"
+        val message = when (playback.status) {
+            PlaybackStatus.TUNING ->
+                if (playback.streamNumber > 1) "Trying backup stream ${playback.streamNumber} of ${playback.streamCount}…"
+                else "Tuning…"
             PlaybackStatus.RECONNECTING -> "Reconnecting…"
             PlaybackStatus.FAILED ->
-                "This channel isn't streaming right now. Press up or down for another channel, or left to go back."
+                (if (playback.streamCount > 1) "None of this channel's ${playback.streamCount} streams are working. "
+                else "This channel isn't working right now. ") +
+                    (playback.reason?.let { "Reason: $it. " } ?: "") +
+                    "Press up or down for another channel, or left to go back."
             else -> null
         }
         if (message != null && !miniGuide) {
@@ -183,8 +189,8 @@ private fun MiniGuide(
     onActions: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    val rows = remember(state.channels, state.playTab, state.favourites, state.status, state.settings) {
-        state.visible(state.playTab)
+    val rows = remember(state.channels, state.playTab, state.playCategory, state.favourites, state.status, state.settings) {
+        state.visible(state.playTab, state.playCategory)
     }
     val start = remember { rows.indexOfFirst { it.index == currentIndex }.coerceAtLeast(0) }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (start - 3).coerceAtLeast(0))
@@ -205,7 +211,11 @@ private fun MiniGuide(
             .background(Brush.horizontalGradient(listOf(Color(0xF2101828), Color(0xD9101828))))
             .padding(start = 48.dp, end = 16.dp, top = 27.dp, bottom = 27.dp),
     ) {
-        Text(state.playTab.label, style = MaterialTheme.typography.titleMedium, color = c.primary)
+        Text(
+            state.playTab.label + (state.playCategory?.let { ": $it" } ?: ""),
+            style = MaterialTheme.typography.titleMedium,
+            color = c.primary,
+        )
         Spacer(Modifier.height(8.dp))
         LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             itemsIndexed(rows, key = { _, r -> r.value.number }) { i, r ->

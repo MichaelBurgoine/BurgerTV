@@ -5,9 +5,12 @@ import android.content.Context
 import com.example.tvplayer.Config
 
 data class AppSettings(
+    val channelsUrl: String = Config.DEFAULT_CHANNELS_URL,
     val ukPlaylist: String = Config.DEFAULT_UK,
     val usaPlaylist: String = Config.DEFAULT_USA,
     val sportsPlaylist: String = Config.DEFAULT_SPORTS,
+    val worldPlaylist: String = Config.DEFAULT_WORLD,
+    val includeWorld: Boolean = true,
     val epgUrl: String = Config.DEFAULT_EPG_URL,
     val hideOffline: Boolean = true,
     val hideGeoBlocked: Boolean = false,
@@ -19,7 +22,7 @@ data class AppSettings(
             PlaylistSource(Section.UK, ukPlaylist, "uk.m3u"),
             PlaylistSource(Section.USA, usaPlaylist, "us.m3u"),
             PlaylistSource(Section.SPORTS, sportsPlaylist, "sports.m3u"),
-        )
+        ) + if (includeWorld) listOf(PlaylistSource(Section.WORLD, worldPlaylist, "world.m3u")) else emptyList()
 }
 
 class Prefs(context: Context) {
@@ -30,9 +33,12 @@ class Prefs(context: Context) {
         // Instant channel change is off by default on low-memory devices.
         val d = AppSettings(instantChannelChange = !lowRam)
         return AppSettings(
+            channelsUrl = prefs.getString("channels", null) ?: d.channelsUrl,
             ukPlaylist = prefs.getString("uk", null) ?: d.ukPlaylist,
             usaPlaylist = prefs.getString("usa", null) ?: d.usaPlaylist,
             sportsPlaylist = prefs.getString("sports", null) ?: d.sportsPlaylist,
+            worldPlaylist = prefs.getString("world", null) ?: d.worldPlaylist,
+            includeWorld = prefs.getBoolean("include_world", d.includeWorld),
             epgUrl = prefs.getString("epg", null) ?: d.epgUrl,
             hideOffline = prefs.getBoolean("hide_offline", d.hideOffline),
             hideGeoBlocked = prefs.getBoolean("hide_geo", d.hideGeoBlocked),
@@ -43,9 +49,12 @@ class Prefs(context: Context) {
 
     fun saveSettings(s: AppSettings) {
         prefs.edit()
+            .putString("channels", s.channelsUrl)
             .putString("uk", s.ukPlaylist)
             .putString("usa", s.usaPlaylist)
             .putString("sports", s.sportsPlaylist)
+            .putString("world", s.worldPlaylist)
+            .putBoolean("include_world", s.includeWorld)
             .putString("epg", s.epgUrl)
             .putBoolean("hide_offline", s.hideOffline)
             .putBoolean("hide_geo", s.hideGeoBlocked)
@@ -60,6 +69,14 @@ class Prefs(context: Context) {
 
     fun saveFavourites(keys: List<String>) {
         prefs.edit().putString("favourites", keys.joinToString("\n")).apply()
+    }
+
+    /** Most recently watched first. */
+    fun loadRecents(): List<String> =
+        prefs.getString("recents", "").orEmpty().split('\n').filter { it.isNotEmpty() }
+
+    fun saveRecents(keys: List<String>) {
+        prefs.edit().putString("recents", keys.joinToString("\n")).apply()
     }
 
     var lastChannel: String?

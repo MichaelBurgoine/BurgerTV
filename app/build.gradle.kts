@@ -13,8 +13,8 @@ android {
         applicationId = "com.example.tvplayer"
         minSdk = 22          // Fire OS 5 and up
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 5
+        versionName = "0.5"
     }
 
     buildTypes {
@@ -41,6 +41,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.tv:tv-material:1.0.0")
+    implementation("androidx.compose.material:material-icons-core")
 
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5")
@@ -49,6 +50,8 @@ dependencies {
     val media3 = "1.4.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3")
+    implementation("androidx.media3:media3-exoplayer-rtsp:$media3")
     implementation("androidx.media3:media3-ui:$media3")
 
     implementation("io.coil-kt:coil-compose:2.7.0")

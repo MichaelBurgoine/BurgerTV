@@ -3,6 +3,7 @@ package com.example.tvplayer.player
 import android.content.Context
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -13,8 +14,8 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import com.example.tvplayer.data.Channel
 import com.example.tvplayer.data.Http
+import com.example.tvplayer.data.StreamSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -25,17 +26,24 @@ import kotlinx.coroutines.launch
 
 enum class PlaybackStatus { IDLE, TUNING, PLAYING, RECONNECTING, FAILED }
 
+data class PlaybackState(
+    val status: PlaybackStatus = PlaybackStatus.IDLE,
+    val streamNumber: Int = 1,
+    val streamCount: Int = 1,
+    val reason: String? = null,
+)
+
 /**
- * Two ExoPlayers: one plays, the other quietly pre-buffers the channel you're likely to
- * zap to next, so changing to it is near instant. Also recovers live streams that stall,
- * fall behind the live window, or drop their connection.
+ * Plays a channel's streams in order, switching to the next backup when one fails.
+ * Two ExoPlayers: one plays, the other pre-buffers the channel you're likely to zap to next.
+ * Live streams that stall, fall behind the live window or drop out are reconnected.
+ * HLS, DASH and RTSP are supported.
  */
 @OptIn(UnstableApi::class)
 class TvPlayer(
     private val context: Context,
     private val scope: CoroutineScope,
-    private val onPlaying: (Channel) -> Unit,
-    private val onFailed: (Channel) -> Unit,
+    private val onStreamResult: (url: String, ok: Boolean) -> Unit,
 ) {
     private inner class Slot {
         val http: DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
@@ -43,20 +51,20 @@ class TvPlayer(
             .setConnectTimeoutMs(8_000)
             .setReadTimeoutMs(8_000)
         val player: ExoPlayer = buildPlayer(http)
-        var channel: Channel? = null
+        var stream: StreamSource? = null
 
-        fun load(ch: Channel, play: Boolean) {
-            channel = ch
-            http.setUserAgent(ch.userAgent ?: Http.USER_AGENT)
-            http.setDefaultRequestProperties(ch.referrer?.let { mapOf("Referer" to it) } ?: emptyMap())
+        fun load(s: StreamSource, play: Boolean) {
+            stream = s
+            http.setUserAgent(s.userAgent ?: Http.USER_AGENT)
+            http.setDefaultRequestProperties(s.referrer?.let { mapOf("Referer" to it) } ?: emptyMap())
             player.volume = if (play) 1f else 0f
             player.playWhenReady = play
-            player.setMediaItem(MediaItem.fromUri(ch.url))
+            player.setMediaItem(mediaItemFor(s))
             player.prepare()
         }
 
         fun clear() {
-            channel = null
+            stream = null
             player.stop()
             player.clearMediaItems()
         }
@@ -70,8 +78,8 @@ class TvPlayer(
     private val _player = MutableStateFlow(slots[0].player)
     val player: StateFlow<ExoPlayer> = _player.asStateFlow()
 
-    private val _status = MutableStateFlow(PlaybackStatus.IDLE)
-    val status: StateFlow<PlaybackStatus> = _status.asStateFlow()
+    private val _state = MutableStateFlow(PlaybackState())
+    val state: StateFlow<PlaybackState> = _state.asStateFlow()
 
     var instantChange: Boolean = true
         set(value) {
@@ -79,6 +87,8 @@ class TvPlayer(
             if (!value) standby.clear()
         }
 
+    private var streams: List<StreamSource> = emptyList()
+    private var streamIdx = 0
     private var retries = 0
     private var retryJob: Job? = null
     private var stallJob: Job? = null
@@ -96,34 +106,41 @@ class TvPlayer(
         }
     }
 
-    fun play(ch: Channel) {
+    /** [ordered] = the channel's streams, best first (working ones ahead of untested and failed). */
+    fun play(ordered: List<StreamSource>) {
+        if (ordered.isEmpty()) return
         cancelJobs()
         retries = 0
+        streams = ordered
+        streamIdx = 0
+        val first = ordered[0]
         val sb = standby
-        if (instantChange && sb.channel?.url == ch.url && sb.player.playbackState != Player.STATE_IDLE) {
+        if (instantChange && sb.stream?.url == first.url && sb.player.playbackState != Player.STATE_IDLE) {
             active.clear()
             activeIdx = 1 - activeIdx
             active.player.volume = 1f
             active.player.playWhenReady = true
             _player.value = active.player
+            setStatus(PlaybackStatus.TUNING)
             onActiveState(active.player.playbackState)
         } else {
-            active.load(ch, play = true)
-            _status.value = PlaybackStatus.TUNING
+            active.load(first, play = true)
+            setStatus(PlaybackStatus.TUNING)
         }
     }
 
-    /** Pre-buffer a channel in the background (no-op when instant change is off). */
-    fun preload(ch: Channel?) {
-        if (!instantChange || ch == null || ch.url == active.channel?.url) return
-        if (standby.channel?.url == ch.url) return
-        standby.load(ch, play = false)
+    /** Pre-buffer a channel's best stream in the background (no-op when instant change is off). */
+    fun preload(ordered: List<StreamSource>) {
+        val first = ordered.firstOrNull() ?: return
+        if (!instantChange || first.url == active.stream?.url || standby.stream?.url == first.url) return
+        standby.load(first, play = false)
     }
 
     fun stop() {
         cancelJobs()
         slots.forEach { it.clear() }
-        _status.value = PlaybackStatus.IDLE
+        streams = emptyList()
+        _state.value = PlaybackState()
     }
 
     fun release() {
@@ -131,19 +148,23 @@ class TvPlayer(
         slots.forEach { it.player.release() }
     }
 
+    private fun setStatus(status: PlaybackStatus, reason: String? = null) {
+        _state.value = PlaybackState(status, streamIdx + 1, streams.size.coerceAtLeast(1), reason)
+    }
+
     private fun onActiveState(state: Int) {
         when (state) {
             Player.STATE_READY -> {
                 retries = 0
                 stallJob?.cancel()
-                _status.value = PlaybackStatus.PLAYING
-                active.channel?.let(onPlaying)
+                setStatus(PlaybackStatus.PLAYING)
+                active.stream?.let { onStreamResult(it.url, true) }
             }
             Player.STATE_BUFFERING -> {
-                if (_status.value != PlaybackStatus.RECONNECTING) _status.value = PlaybackStatus.TUNING
+                if (_state.value.status != PlaybackStatus.RECONNECTING) setStatus(PlaybackStatus.TUNING)
                 watchForStall()
             }
-            Player.STATE_ENDED -> retry() // a live channel shouldn't end; reconnect
+            Player.STATE_ENDED -> retry("The stream ended") // a live channel shouldn't end
             else -> Unit
         }
     }
@@ -155,35 +176,73 @@ class TvPlayer(
             active.player.prepare()
             return
         }
-        val http = (error.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
-        if (http != null && http in 400..499) retries = MAX_RETRIES // gone or blocked, don't keep trying
-        retry()
+        val (reason, fatal) = describe(error)
+        if (fatal) nextStream(reason) else retry(reason)
     }
 
     private fun watchForStall() {
         stallJob?.cancel()
         stallJob = scope.launch {
             delay(STALL_MS)
-            if (active.player.playbackState == Player.STATE_BUFFERING) retry()
+            if (active.player.playbackState == Player.STATE_BUFFERING) retry("The stream stopped responding")
         }
     }
 
-    private fun retry() {
-        val ch = active.channel ?: return
+    /** Temporary problem: reconnect to the same stream a few times before giving up on it. */
+    private fun retry(reason: String) {
+        if (active.stream == null) return
         if (retries >= MAX_RETRIES) {
-            stallJob?.cancel()
-            _status.value = PlaybackStatus.FAILED
-            onFailed(ch)
+            nextStream(reason)
             return
         }
         retries++
-        _status.value = PlaybackStatus.RECONNECTING
+        setStatus(PlaybackStatus.RECONNECTING, reason)
         retryJob?.cancel()
         retryJob = scope.launch {
             delay(1_000L * retries)
             active.player.seekToDefaultPosition()
             active.player.prepare()
         }
+    }
+
+    /** This stream is no good: record it and move to the channel's next backup stream. */
+    private fun nextStream(reason: String) {
+        cancelJobs()
+        active.stream?.let { onStreamResult(it.url, false) }
+        retries = 0
+        if (streamIdx + 1 < streams.size) {
+            streamIdx++
+            setStatus(PlaybackStatus.TUNING, reason)
+            active.load(streams[streamIdx], play = true)
+        } else {
+            setStatus(PlaybackStatus.FAILED, reason)
+        }
+    }
+
+    /** Plain-English reason, and whether retrying the same stream is pointless. */
+    private fun describe(e: PlaybackException): Pair<String, Boolean> {
+        val http = (e.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+        return when {
+            http == 401 || http == 403 || http == 451 -> "Blocked in your country or by the broadcaster" to true
+            http == 404 || http == 410 -> "Stream not found" to true
+            http != null && http in 400..499 -> "The stream refused the connection (error $http)" to true
+            http != null -> "The stream's server had a problem (error $http)" to false
+            e.errorCode in UNSUPPORTED || e.errorCode in 6000..6999 -> "Unsupported stream format" to true
+            e.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ||
+                e.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                "Couldn't connect to the stream" to false
+            else -> "The stream stopped working" to false
+        }
+    }
+
+    private fun mediaItemFor(s: StreamSource): MediaItem {
+        val builder = MediaItem.Builder().setUri(s.url)
+        val path = s.url.substringBefore('?').lowercase()
+        when {
+            path.endsWith(".m3u8") -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+            path.endsWith(".mpd") -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
+        }
+        return builder.build()
     }
 
     private fun cancelJobs() {
@@ -210,5 +269,14 @@ class TvPlayer(
     private companion object {
         const val MAX_RETRIES = 3
         const val STALL_MS = 15_000L
+        val UNSUPPORTED = setOf(
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+        )
     }
 }

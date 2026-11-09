@@ -2,9 +2,11 @@
 
 package com.example.tvplayer.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +19,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,6 +60,7 @@ import androidx.tv.material3.Text
 import com.example.tvplayer.Config
 import com.example.tvplayer.data.Channel
 import com.example.tvplayer.data.Programme
+import com.example.tvplayer.data.Section
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -64,7 +69,7 @@ import java.util.Locale
 private const val STEP_MS = 30 * 60 * 1000L          // grid moves in half hours
 private const val WINDOW_MS = 4 * STEP_MS             // two hours on screen
 private val CHANNEL_COL = 240.dp
-private val ROW_HEIGHT = 60.dp
+private val ROW_HEIGHT = 56.dp
 
 private fun floorToStep(t: Long) = t - (t % STEP_MS)
 
@@ -74,11 +79,13 @@ data class GuideFocus(val channel: Channel, val programme: Programme?)
 fun GuideScreen(
     state: UiState,
     onSelectTab: (GuideTab) -> Unit,
+    onSelectCategory: (String?) -> Unit,
     onPlay: (Int) -> Unit,
     onOpenSearch: (String) -> Unit,
-    onOpenSettings: () -> Unit,
+    onClose: () -> Unit,
     onActions: (Int) -> Unit,
 ) {
+    BackHandler(onBack = onClose)
     val now by produceState(System.currentTimeMillis()) {
         while (true) { delay(30_000); value = System.currentTimeMillis() }
     }
@@ -93,14 +100,17 @@ fun GuideScreen(
         if (windowStart < floor) windowStart = floor
     }
 
-    val rows = remember(state.channels, state.tab, state.favourites, state.status, state.settings, state.playingIndex) {
-        state.visible(state.tab)
+    val rows = remember(state.channels, state.tab, state.category, state.favourites, state.status, state.settings, state.playingIndex) {
+        state.visible(state.tab, state.category)
+    }
+    val categories = remember(state.channels, state.tab, state.favourites, state.status, state.settings) {
+        state.categoriesFor(state.tab)
     }
 
     Column(
         Modifier
             .fillMaxSize()
-            .padding(horizontal = 48.dp, vertical = 24.dp)
+            .padding(start = 24.dp, end = 48.dp, top = 24.dp, bottom = 24.dp)
             // Menu button opens search; number keys open search with that number typed.
             .onPreviewKeyEvent { e ->
                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -114,21 +124,26 @@ fun GuideScreen(
     ) {
         InfoPanel(focusInfo, state, timeFmt, timeFmt.format(Date(now)))
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PillButton("Search") { onOpenSearch("") }
-            Spacer(Modifier.width(12.dp))
-            PillButton("Settings", onClick = onOpenSettings)
-            Spacer(Modifier.width(16.dp))
-            GuideTabs(state.tab, onSelectTab)
+        GuideTabs(state.tab, onSelectTab)
+        if (categories.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            CategoryRow(
+                categories,
+                state.category,
+                if (state.tab == GuideTab.WORLD) "All countries" else "All categories",
+                onSelectCategory,
+            )
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
         when {
             state.channels.isEmpty() && state.loading -> Message("Loading channels…")
             state.channels.isEmpty() -> Message(state.error ?: "No channels found.")
             rows.isEmpty() && state.tab == GuideTab.FAVOURITES ->
                 Message("No favourites yet. Hold select on any channel to add it.")
+            rows.isEmpty() && state.category != null ->
+                Message("No ${state.category} channels here right now. Choose the first chip to see everything.")
             rows.isEmpty() -> Message("No ${state.tab.label} channels to show. Offline channels can be shown again in Settings.")
-            else -> key(state.tab) {
+            else -> key(state.tab, state.category) {
                 GuideGrid(
                     rows = rows,
                     state = state,
@@ -151,7 +166,7 @@ fun GuideScreen(
 private fun InfoPanel(focus: GuideFocus?, state: UiState, fmt: SimpleDateFormat, clock: String) {
     val c = MaterialTheme.colorScheme
     val type = MaterialTheme.typography
-    Row(Modifier.fillMaxWidth().height(96.dp)) {
+    Row(Modifier.fillMaxWidth().height(84.dp)) {
         Column(Modifier.weight(1f).padding(end = 24.dp)) {
             val p = focus?.programme
             when {
@@ -204,6 +219,32 @@ private fun GuideTabs(selected: GuideTab, onSelect: (GuideTab) -> Unit) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CategoryRow(categories: List<String>, selected: String?, allLabel: String, onSelect: (String?) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 2.dp)) {
+        item(key = "__all") { ChoicePill(allLabel, selected == null) { onSelect(null) } }
+        items(categories, key = { it }) { cat -> ChoicePill(cat, selected == cat) { onSelect(cat) } }
+    }
+}
+
+@Composable
+private fun ChoicePill(label: String, selected: Boolean, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50)),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = if (selected) c.surfaceVariant else Color.Transparent,
+            contentColor = if (selected) c.primary else c.onSurfaceVariant,
+            focusedContainerColor = c.primary,
+            focusedContentColor = c.onPrimary,
+        ),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
     }
 }
 
@@ -436,6 +477,7 @@ private fun ChannelCell(channel: Channel, favourite: Boolean, offline: Boolean) 
             val note = when {
                 offline -> "Offline"
                 channel.geoBlocked -> "Geo-blocked"
+                channel.section == Section.WORLD -> channel.countryName
                 else -> null
             }
             note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.onSurfaceVariant) }

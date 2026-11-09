@@ -45,23 +45,33 @@ import com.example.tvplayer.Config
 import com.example.tvplayer.data.AppSettings
 
 private enum class EditField(val title: String, val hint: String) {
+    CHANNELS(
+        "Channel list address",
+        "channels.json from your GitHub workflow. Adds backup streams, categories and alternative names. " +
+            "Leave blank to use the three playlists below.",
+    ),
     EPG("Guide address", "Link to an XMLTV file built with iptv-org/epg, ending .xml or .xml.gz. Leave blank for no guide."),
     UK("UK playlist", "M3U playlist link for the UK tab."),
     USA("USA playlist", "M3U playlist link for the USA tab."),
-    SPORTS("Sports playlist", "M3U playlist link for the Sports tab.");
+    SPORTS("Sports playlist", "M3U playlist link for the Sports tab."),
+    WORLD("World playlist", "M3U playlist link for every other country. Defaults to iptv-org's full list.");
 
     fun get(s: AppSettings) = when (this) {
+        CHANNELS -> s.channelsUrl
         EPG -> s.epgUrl
         UK -> s.ukPlaylist
         USA -> s.usaPlaylist
         SPORTS -> s.sportsPlaylist
+        WORLD -> s.worldPlaylist
     }
 
     fun set(s: AppSettings, v: String) = when (this) {
+        CHANNELS -> s.copy(channelsUrl = v)
         EPG -> s.copy(epgUrl = v)
         UK -> s.copy(ukPlaylist = v.ifBlank { Config.DEFAULT_UK })
         USA -> s.copy(usaPlaylist = v.ifBlank { Config.DEFAULT_USA })
         SPORTS -> s.copy(sportsPlaylist = v.ifBlank { Config.DEFAULT_SPORTS })
+        WORLD -> s.copy(worldPlaylist = v.ifBlank { Config.DEFAULT_WORLD })
     }
 }
 
@@ -85,7 +95,7 @@ fun SettingsScreen(
 
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 48.dp, vertical = 27.dp),
+        contentPadding = PaddingValues(start = 24.dp, end = 48.dp, top = 27.dp, bottom = 27.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
@@ -103,6 +113,13 @@ fun SettingsScreen(
             SettingRow("Hide geo-blocked channels", "Channels iptv-org says only work in certain countries.", onOff(s.hideGeoBlocked)) {
                 onSave(s.copy(hideGeoBlocked = !s.hideGeoBlocked))
             }
+        }
+        item {
+            SettingRow(
+                "Channels from other countries",
+                "Adds the World tab with every country iptv-org lists. Turn off for a faster start on older sticks.",
+                onOff(s.includeWorld),
+            ) { onSave(s.copy(includeWorld = !s.includeWorld)) }
         }
         item {
             SettingRow("Start on the last channel", "Opens straight into whatever you were watching.", onOff(s.resumeLastChannel)) {
@@ -126,13 +143,31 @@ fun SettingsScreen(
             SettingRow("Update guide now", state.guideError ?: guideSummary(state), null, onClick = onRefreshGuide)
         }
 
-        item { Header("Playlists") }
-        listOf(EditField.UK, EditField.USA, EditField.SPORTS).forEach { f ->
-            item { SettingRow(f.title, null, f.get(s)) { editing = f } }
+        item { Header("Channel sources") }
+        item {
+            SettingRow(EditField.CHANNELS.title, EditField.CHANNELS.hint, s.channelsUrl.ifBlank { "Not set" }) {
+                editing = EditField.CHANNELS
+            }
+        }
+        listOf(EditField.UK, EditField.USA, EditField.SPORTS, EditField.WORLD).forEach { f ->
+            item {
+                SettingRow(
+                    f.title,
+                    if (s.channelsUrl.isNotBlank()) "Not used while a channel list address is set." else null,
+                    f.get(s),
+                ) { editing = f }
+            }
         }
         item {
-            SettingRow("Reset playlists", "Go back to the iptv-org UK, USA and Sports lists.", null) {
-                onSave(s.copy(ukPlaylist = Config.DEFAULT_UK, usaPlaylist = Config.DEFAULT_USA, sportsPlaylist = Config.DEFAULT_SPORTS))
+            SettingRow("Reset playlists", "Go back to the iptv-org UK, USA, Sports and World lists.", null) {
+                onSave(
+                    s.copy(
+                        ukPlaylist = Config.DEFAULT_UK,
+                        usaPlaylist = Config.DEFAULT_USA,
+                        sportsPlaylist = Config.DEFAULT_SPORTS,
+                        worldPlaylist = Config.DEFAULT_WORLD,
+                    )
+                )
             }
         }
     }

@@ -1,5 +1,8 @@
-# Builds the programme guide every morning with iptv-org/epg and publishes it to GitHub Pages.
-# Guide address for the app: https://<your-github-name>.github.io/<this-repo>/guide.xml.gz
+# Every morning: builds the app's channel list (all stream links for UK, USA and sports channels,
+# from the iptv-org API and database) and the programme guide (iptv-org/epg), then publishes
+# both to GitHub Pages.
+#   Channel list address: https://<your-github-name>.github.io/<this-repo>/channels.json
+#   Guide address:        https://<your-github-name>.github.io/<this-repo>/guide.xml.gz
 name: Update TV guide
 
 on:
@@ -21,20 +24,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Build channel list for the app
+        run: python3 tools/build_channels.py site/channels.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Get iptv-org/epg
         run: |
           git clone --depth 1 https://github.com/iptv-org/epg.git epg
           cd epg && npm install
 
-      - name: Build channel list from the app's playlists
+      - name: Build guide channel list
         working-directory: epg
         run: python3 ../tools/make_epg_channels.py
 
@@ -46,7 +52,6 @@ jobs:
 
       - name: Prepare site
         run: |
-          mkdir -p site
           cp epg/guide.xml.gz site/
           date -u +"%Y-%m-%dT%H:%M:%SZ" > site/updated.txt
 

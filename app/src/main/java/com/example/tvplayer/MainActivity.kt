@@ -2,16 +2,21 @@ package com.example.tvplayer
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
@@ -21,7 +26,11 @@ import com.example.tvplayer.ui.AppViewModel
 import com.example.tvplayer.ui.ChannelActions
 import com.example.tvplayer.ui.GuideScreen
 import com.example.tvplayer.ui.GuideTab
+import com.example.tvplayer.ui.HomeScreen
+import com.example.tvplayer.ui.NavRail
 import com.example.tvplayer.ui.PlayerScreen
+import com.example.tvplayer.ui.RailCollapsed
+import com.example.tvplayer.ui.Screen
 import com.example.tvplayer.ui.SearchScreen
 import com.example.tvplayer.ui.SettingsScreen
 import com.example.tvplayer.ui.theme.TvTheme
@@ -38,16 +47,21 @@ class MainActivity : ComponentActivity() {
     override fun onStop() { vm.pauseForBackground(); super.onStop() }
 }
 
-private enum class Screen { GUIDE, SEARCH, SETTINGS }
-
 @Composable
 private fun AppRoot(vm: AppViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val exo by vm.player.player.collectAsStateWithLifecycle()
-    val status by vm.player.status.collectAsStateWithLifecycle()
-    var screen by rememberSaveable { mutableStateOf(Screen.GUIDE) }
+    val playback by vm.player.state.collectAsStateWithLifecycle()
+    var screen by rememberSaveable { mutableStateOf(Screen.HOME) }
     var searchStart by rememberSaveable { mutableStateOf("") }
     var actionsFor by remember { mutableStateOf<Int?>(null) }
+    val railRequester = remember { FocusRequester() }
+    var railFocused by remember { mutableStateOf(false) }
+
+    fun openSearch(start: String) {
+        searchStart = start
+        screen = Screen.SEARCH
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -58,43 +72,71 @@ private fun AppRoot(vm: AppViewModel) {
         ),
     ) {
         val playing = state.playingIndex?.let { state.channels.getOrNull(it) }
-        when {
-            playing != null -> PlayerScreen(
+        if (playing != null) {
+            PlayerScreen(
                 state = state,
                 channel = playing,
                 player = exo,
-                status = status,
+                playback = playback,
                 onZap = vm::zap,
                 onPrevious = vm::previousChannel,
-                onTune = { vm.play(it, state.playTab) },
+                onTune = { vm.play(it, state.playTab, state.playCategory) },
                 onActions = { actionsFor = it },
                 onBack = vm::stop,
             )
-            screen == Screen.SEARCH -> SearchScreen(
-                state = state,
-                initialQuery = searchStart,
-                onPlay = { index ->
-                    screen = Screen.GUIDE
-                    vm.play(index, GuideTab.of(state.channels[index].section))
-                },
-                onActions = { actionsFor = it },
-                onClose = { screen = Screen.GUIDE },
-            )
-            screen == Screen.SETTINGS -> SettingsScreen(
-                state = state,
-                onSave = vm::updateSettings,
-                onRefreshGuide = vm::refreshGuideNow,
-                onCheckStreams = vm::checkAllStreams,
-                onClose = { screen = Screen.GUIDE },
-            )
-            else -> GuideScreen(
-                state = state,
-                onSelectTab = vm::selectTab,
-                onPlay = { vm.play(it) },
-                onOpenSearch = { searchStart = it; screen = Screen.SEARCH },
-                onOpenSettings = { screen = Screen.SETTINGS },
-                onActions = { actionsFor = it },
-            )
+        } else {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().padding(start = RailCollapsed)) {
+                    when (screen) {
+                        Screen.HOME -> HomeScreen(
+                            state = state,
+                            onPlay = { index, tab, category -> vm.play(index, tab, category) },
+                            onSeeAll = { tab, category ->
+                                vm.openGuide(tab, category)
+                                screen = Screen.GUIDE
+                            },
+                            onOpenSearch = ::openSearch,
+                            onActions = { actionsFor = it },
+                        )
+                        Screen.GUIDE -> GuideScreen(
+                            state = state,
+                            onSelectTab = vm::selectTab,
+                            onSelectCategory = vm::selectCategory,
+                            onPlay = { vm.play(it) },
+                            onOpenSearch = ::openSearch,
+                            onClose = { screen = Screen.HOME },
+                            onActions = { actionsFor = it },
+                        )
+                        Screen.SEARCH -> SearchScreen(
+                            state = state,
+                            initialQuery = searchStart,
+                            onPlay = { index ->
+                                vm.play(index, GuideTab.of(state.channels[index].section), null)
+                            },
+                            onActions = { actionsFor = it },
+                            onClose = { screen = Screen.HOME },
+                        )
+                        Screen.SETTINGS -> SettingsScreen(
+                            state = state,
+                            onSave = vm::updateSettings,
+                            onRefreshGuide = vm::refreshGuideNow,
+                            onCheckStreams = vm::checkAllStreams,
+                            onClose = { screen = Screen.HOME },
+                        )
+                    }
+                }
+                NavRail(
+                    current = screen,
+                    onSelect = { s -> if (s == Screen.SEARCH) openSearch("") else screen = s },
+                    selectedRequester = railRequester,
+                    onFocusChanged = { railFocused = it },
+                    modifier = Modifier.align(Alignment.CenterStart),
+                )
+                // On Home, back first moves to the menu; back again leaves the app.
+                BackHandler(enabled = screen == Screen.HOME && !railFocused) {
+                    runCatching { railRequester.requestFocus() }
+                }
+            }
         }
 
         actionsFor?.let { index ->
