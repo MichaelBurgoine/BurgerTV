@@ -1,0 +1,57 @@
+# Builds the programme guide every morning with iptv-org/epg and publishes it to GitHub Pages.
+# Guide address for the app: https://<your-github-name>.github.io/<this-repo>/guide.xml.gz
+name: Update TV guide
+
+on:
+  schedule:
+    - cron: "0 4 * * *"   # 04:00 UTC daily
+  workflow_dispatch:       # "Run workflow" button for a manual update
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-guide
+  cancel-in-progress: true
+
+jobs:
+  guide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get iptv-org/epg
+        run: |
+          git clone --depth 1 https://github.com/iptv-org/epg.git epg
+          cd epg && npm install
+
+      - name: Build channel list from the app's playlists
+        working-directory: epg
+        run: python3 ../tools/make_epg_channels.py
+
+      - name: Grab two days of listings
+        working-directory: epg
+        run: |
+          npm run grab --- --channels=custom.channels.xml --output=guide.xml --days=2
+          gzip -9 -k guide.xml
+
+      - name: Prepare site
+        run: |
+          mkdir -p site
+          cp epg/guide.xml.gz site/
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > site/updated.txt
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          force_orphan: true
